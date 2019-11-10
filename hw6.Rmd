@@ -13,4 +13,151 @@ knitr::opts_chunk$set(echo = TRUE, comment = NA, message = FALSE,
 ```
 
 
+Packages:
+
+```{r}
+library(tidyverse)
+library(vroom)
+#devtools::install_github("tidyverse/multidplyr")
+# make sure all other packages are up to date first
+library(multidplyr)
+library(lubridate)
+```
+
+
+We need to load in the data before we can do anything. 
+
+```{r}
+base_url = "http://www2.stat.duke.edu/~sms185/data/bike/"
+files = c("cbs_2013.csv", "cbs_2014.csv", "cbs_2015.csv", "cbs_2016.csv", "cbs_2017.csv")
+
+cbs_names = c("duration", "start_date", "end_date", "start_station_number", 
+               "start_station","start_station_number", "start_station", 
+               "bike_number","member_type")
+
+# code from slides
+clust <- multidplyr::new_cluster(4)
+multidplyr::cluster_assign_partition(clust, file_name = paste0(base_url, files))
+multidplyr::cluster_send(clust, cbs_data <- vroom::vroom(file_name))
+cbs <- multidplyr::party_df(clust, "cbs_data")
+```
+
+
+Change the names with ``rename()`` so we don't have to collect the dataframe yet:
+
+```{r}
+cbs = cbs %>%
+  rename(duration = Duration,
+         start_date = `Start date`,
+         end_date = `End date`,
+         start_station_number = `Start station number`,
+         start_station = `Start station`,
+         end_station_number = `End station number`,
+         end_station = `End station`,
+         member_type = `Member type`,
+         bike_number = `Bike number`)
+```
+
+
+Here's what we hve:
+
+```{r}
+cbs
+```
+
+
+Collect the data because dealing with clusters is hard:
+
+```{r}
+cbs_collected = collect(cbs)
+```
+
+
+Load the test data so we can start making predictions. **We should add weather to the test set at this stage of the document.**
+
+```{r}
+test_set = vroom::vroom("http://www2.stat.duke.edu/~sms185/data/bike/cbs_test.csv")
+```
+
+
+First a function for getting all reasonable stops. Warning: this is slow - we should parallelize it. **This function needs to be generalized and probably parallelized. Add weather, etc. Probably also faster to filter by month first?**
+
+```{r}
+get_possible_stops = function(row, input_df) {
+  
+  possible_stops = input_df %>% 
+    filter(start_station == row$start_station,
+           abs(month(start_date) - month(row$start_date))<=3,
+           abs(hour(start_date))-hour(row$start_date) <=3 ,
+           duration >= 0.2*row$duration, duration <= 1.2*row$duration) %>%
+    select(end_station)
+  
+  possible_stops
+}
+```
+
+Then a function for making predictions based on these stops. We're going to need a list of possible stops:
+
+```{r}
+features = c("start_date","end_date","duration","start_station_number",
+                  "start_station","bike_number", "member_type")
+all_stops = names(test_set)[!(names(test_set) %in% features)]
+```
+
+
+
+```{r}
+library(data.table)
+```
+
+
+The function: (transpose from data.table)
+
+```{r}
+make_predictions <- function(possible_stops, all_stops) {
+  
+  # first compute the nonzero probabilities
+  nonzero_probs = table(possible_stops$end_station)/nrow(possible_stops)
+  predictions = transpose(data.frame(nonzero_probs))
+  
+  # contort that table into a dataframe with numeric entries
+  names(predictions) = predictions[1,]
+  predictions = predictions[-1,]
+  predictions =  mutate_all(predictions, function(x) as.numeric(x))
+              
+  # set the probability of any missing stops to zero              
+  zero_probs = all_stops[!(all_stops %in% names(predictions))]
+  predictions[zero_probs] = 0
+  
+  predictions
+}
+
+```
+
+
+Here's an example:
+
+```{r}
+example_stops = get_possible_stops(test_set[1,], cbs_collected)
+example_prediction = make_predictions(example_stops, all_stops)
+example_prediction
+```
+
+Note that the probabilities sum to 1 but $94\%$ of the stops have zero probability.
+
+```{r}
+sum(example_prediction)
+mean(example_prediction[1,] != 0)
+```
+
+Finally, we need to make a wrapper that runs this on all of the test data. This would be a good place to parallelize as well.
+
+
+
+
+
+
+
+
+
 

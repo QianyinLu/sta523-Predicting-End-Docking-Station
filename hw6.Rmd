@@ -101,7 +101,19 @@ make_predictions <- function(similar_rows, all_stops) {
 
 ```
 
-**Also need a fast helper function to join these together. Maybe mcapply or something?**
+**Also need a fast helper function to join these together. Maybe mcapply or something? I just have a simple wrapper for now. Sorting the columns too for faster binding later.**
+
+```{r}
+prediction_wrapper = function(row, input_dt, features, all_stops, ordered_names) {
+  
+  similar_rows = get_similar_rows(row, input_dt)
+  predictions = make_predictions(similar_rows, all_stops)
+  
+  predictions = cbind(row[features], predictions)
+  
+  predictions[,ordered_names]
+}
+```
 
 
 ### Testing
@@ -112,20 +124,50 @@ test_set = test_set %>% mutate(month = lubridate::month(start_date),
                hour = lubridate::hour(start_date))
 ```
 
-Here's what a sample row looks like:
+Get extra information to pass to the helper functions:
 ```{r}
+ordered_names = names(test_set)
+
 features = c("start_date","end_date","duration","start_station_number",
                   "start_station","bike_number", "member_type")
 all_stops = names(test_set)[!(names(test_set) %in% features)]
 
-example_row = test_set[28,]
-similar_rows = get_similar_rows(example_row, cbs_dt)
-make_predictions(similar_rows, all_stops)
+```
+
+Here's an example row:
+```{r}
+prediction_wrapper(test_set[500,], cbs_dt, all_stops, ordered_names)
+```
+
+Finally, out functions on the entire thing.
+
+```{r}
+library(plyr)
+```
+
+**Currently only running on part of the data. I think we have memory problems if we try to do it all at once.**
+
+```{r}
+final_predictions = adply(test_set[300:310,], 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names),
+                           .progress = "text")
+final_predictions
+```
+
+**Row 307 breaks. Why??**
+
+```{r}
+test_set[307,]
 ```
 
 
+```{r}
+ prediction_wrapper(test_set[307,], cbs_dt, features, all_stops, ordered_names)
+```
 
+Looks like there are no similar rows! Need to add an exception to use some set of default probabilities in this case. That should be a quick fix.
 
-
+```{r}
+get_similar_rows(test_set[307,], cbs_dt)
+```
 
 

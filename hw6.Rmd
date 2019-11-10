@@ -12,9 +12,9 @@ knitr::opts_chunk$set(echo = TRUE, comment = NA, message = FALSE,
                       warning = FALSE)
 ```
 
+## Task 1
 
-Packages:
-
+Start by loading backages and the data.
 ```{r}
 library(tidyverse)
 library(vroom)
@@ -22,29 +22,27 @@ library(vroom)
 # make sure all other packages are up to date first
 library(multidplyr)
 library(lubridate)
+library(data.table)
 ```
 
-
-We need to load in the data before we can do anything. 
-
+**Currently only using 3 years of data and three clusters. Make sure to use four NEW clusters to parallelize the predictions.**
 ```{r}
 base_url = "http://www2.stat.duke.edu/~sms185/data/bike/"
-files = c("cbs_2013.csv", "cbs_2014.csv", "cbs_2015.csv", "cbs_2016.csv", "cbs_2017.csv")
+#files = c("cbs_2013.csv", "cbs_2014.csv", "cbs_2015.csv", "cbs_2016.csv", "cbs_2017.csv")
+files = c("cbs_2015.csv", "cbs_2016.csv", "cbs_2017.csv")
 
 cbs_names = c("duration", "start_date", "end_date", "start_station_number", 
                "start_station","start_station_number", "start_station", 
                "bike_number","member_type")
 
 # code from slides
-clust <- multidplyr::new_cluster(4)
+clust <- multidplyr::new_cluster(3)
 multidplyr::cluster_assign_partition(clust, file_name = paste0(base_url, files))
 multidplyr::cluster_send(clust, cbs_data <- vroom::vroom(file_name))
 cbs <- multidplyr::party_df(clust, "cbs_data")
 ```
 
-
-Change the names with ``rename()`` so we don't have to collect the dataframe yet:
-
+Change the names with ``rename()`` to match what we'll see in the test set:
 ```{r}
 cbs = cbs %>%
   rename(duration = Duration,
@@ -58,74 +56,43 @@ cbs = cbs %>%
          bike_number = `Bike number`)
 ```
 
-
-Here's what we hve:
-
+We'll add the month and year as a column to make sorting quicker later on. **Note - this is where we would add the weather.**
 ```{r}
-cbs
+cbs = cbs %>% mutate(month = lubridate::month(start_date),
+               hour = lubridate::hour(start_date))
+```
+
+Now we can safely move everything back to our machine, make a data.table and set keys. **It might make sense to set weather as the second key here too.**
+```{r}
+cbs_dt = data.table(collect(cbs))
+setkey(cbs_dt, start_station, duration, end_station)
 ```
 
 
-Collect the data because dealing with clusters is hard:
+## Task 2:
 
+### Helper Functions
+We have 2 hours and 4 cores to play with: that's 120x4x60=28800 seconds of computing time. There are 12532 rows we need to predict. This gives us 28800/12532 = 2.3 seconds per row, including overhead and everything. That means we probably need to get each individual prediction to under two seconds for this to work.
+
+First a function for getting "similar" rows. We'll use data.tables because it's crazy fast. **This function needs to be generalized a little. Add weather, etc. Order really, really, really matters.**
 ```{r}
-cbs_collected = collect(cbs)
-```
-
-
-Load the test data so we can start making predictions. **We should add weather to the test set at this stage of the document.**
-
-```{r}
-test_set = vroom::vroom("http://www2.stat.duke.edu/~sms185/data/bike/cbs_test.csv")
-```
-
-
-First a function for getting all reasonable stops. Warning: this is slow - we should parallelize it. **This function needs to be generalized and probably parallelized. Add weather, etc. Probably also faster to filter by month first?**
-
-```{r}
-get_possible_stops = function(row, input_df) {
+get_similar_rows <- function(row, input_dt) {
   
-  possible_stops = input_df %>% 
-    filter(start_station == row$start_station,
-           abs(month(start_date) - month(row$start_date))<=3,
-           abs(hour(start_date))-hour(row$start_date) <=3 ,
-           duration >= 0.2*row$duration, duration <= 1.2*row$duration) %>%
-    select(end_station)
+  same_start = cbs_dt[J(row$start_station), nomatch=0L]
   
-  possible_stops
+  same_start[duration %between% c(0.8*row$duration, 1.2*row$duration) &
+               abs(month(start_date) - month(row$start_date))<=3 &
+               abs(hour(start_date))-hour(row$start_date) <=3]
 }
 ```
 
-Then a function for making predictions based on these stops. We're going to need a list of possible stops:
-
+The next step is to assign the empirical probabilitiy to each row. Example: If there are 400 posible stops and stop j appears 18 times in the list of similar rows then we would set p(end_stop = stop_j|data) = 18/400/ If stop k does not appear in the similar rows then we set p(end_stop = stop_k|data) = 0. **Needs comments.**
 ```{r}
-features = c("start_date","end_date","duration","start_station_number",
-                  "start_station","bike_number", "member_type")
-all_stops = names(test_set)[!(names(test_set) %in% features)]
-```
-
-
-
-```{r}
-library(data.table)
-```
-
-
-The function: (transpose from data.table)
-
-```{r}
-make_predictions <- function(possible_stops, all_stops) {
+make_predictions <- function(similar_rows, all_stops) {
   
-  # first compute the nonzero probabilities
-  nonzero_probs = table(possible_stops$end_station)/nrow(possible_stops)
-  predictions = transpose(data.frame(nonzero_probs))
+  nonzero_probs = as.data.frame(table(similar_rows$end_station)/nrow(similar_rows))
+  predictions = spread(nonzero_probs, key=Var1, value=Freq)
   
-  # contort that table into a dataframe with numeric entries
-  names(predictions) = predictions[1,]
-  predictions = predictions[-1,]
-  predictions =  mutate_all(predictions, function(x) as.numeric(x))
-              
-  # set the probability of any missing stops to zero              
   zero_probs = all_stops[!(all_stops %in% names(predictions))]
   predictions[zero_probs] = 0
   
@@ -134,26 +101,27 @@ make_predictions <- function(possible_stops, all_stops) {
 
 ```
 
+**Also need a fast helper function to join these together. Maybe mcapply or something?**
 
-Here's an example:
 
+### Testing
+Need to load the test data. **We should add weather to the test data in the next code chunk:**
 ```{r}
-example_stops = get_possible_stops(test_set[1,], cbs_collected)
-example_prediction = make_predictions(example_stops, all_stops)
-example_prediction
+test_set = vroom::vroom("http://www2.stat.duke.edu/~sms185/data/bike/cbs_test.csv")
+test_set = test_set %>% mutate(month = lubridate::month(start_date),
+               hour = lubridate::hour(start_date))
 ```
 
-Note that the probabilities sum to 1 but $94\%$ of the stops have zero probability.
-
+Here's what a sample row looks like:
 ```{r}
-sum(example_prediction)
-mean(example_prediction[1,] != 0)
+features = c("start_date","end_date","duration","start_station_number",
+                  "start_station","bike_number", "member_type")
+all_stops = names(test_set)[!(names(test_set) %in% features)]
+
+example_row = test_set[28,]
+similar_rows = get_similar_rows(example_row, cbs_dt)
+make_predictions(similar_rows, all_stops)
 ```
-
-Finally, we need to make a wrapper that runs this on all of the test data. This would be a good place to parallelize as well.
-
-
-
 
 
 

@@ -26,6 +26,8 @@ library(data.table)
 ```
 
 **Currently only using 3 years of data and three clusters. Make sure to use four NEW clusters to parallelize the predictions.**
+
+**TO DO - see if all the data performs better**
 ```{r}
 base_url = "http://www2.stat.duke.edu/~sms185/data/bike/"
 #files = c("cbs_2013.csv", "cbs_2014.csv", "cbs_2015.csv", "cbs_2016.csv", "cbs_2017.csv")
@@ -101,12 +103,20 @@ make_predictions <- function(similar_rows, all_stops) {
 
 ```
 
-**Also need a fast helper function to join these together. Maybe mcapply or something? I just have a simple wrapper for now. Sorting the columns too for faster binding later.**
+**Also need a fast helper function to join these together. Maybe mcapply or something? I just have a simple wrapper for now. Sorting the columns too for faster binding later. Currently handling outliers by using the precomputed naive probability. We can do better.**
 
 ```{r}
 prediction_wrapper = function(row, input_dt, features, all_stops, ordered_names) {
   
   similar_rows = get_similar_rows(row, input_dt)
+  
+  # if nrow(similar_rows) is zero, do something else
+  # could probably do better than this
+  if(nrow(similar_rows)==0){
+    return(row[,ordered_names])
+  }
+  
+  # maybe give these different names
   predictions = make_predictions(similar_rows, all_stops)
   
   predictions = cbind(row[features], predictions)
@@ -145,29 +155,25 @@ Finally, out functions on the entire thing.
 library(plyr)
 ```
 
-**Currently only running on part of the data. I think we have memory problems if we try to do it all at once.**
+**Currently only running on part of the data.**
 
 ```{r}
-final_predictions = adply(test_set[300:310,], 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names),
+final_predictions = adply(test_set[1:10,], 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names),
                            .progress = "text")
 final_predictions
 ```
 
-**Row 307 breaks. Why??**
 
+Save these results:
 ```{r}
-test_set[307,]
+#write.csv(final_predictions, "cbs_git-r-done.csv")
 ```
 
+**This is writing the times incorrectly and adding row names...Also still has month and hour - we should drop those before stitching the rows together.**
 
-```{r}
- prediction_wrapper(test_set[307,], cbs_dt, features, all_stops, ordered_names)
-```
 
-Looks like there are no similar rows! Need to add an exception to use some set of default probabilities in this case. That should be a quick fix.
 
-```{r}
-get_similar_rows(test_set[307,], cbs_dt)
-```
+
+
 
 

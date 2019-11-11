@@ -24,6 +24,7 @@ library(multidplyr)
 library(lubridate)
 ```
 
+## Import csv
 
 We need to load in the data before we can do anything. 
 
@@ -58,6 +59,16 @@ cbs = cbs %>%
 ```
 
 
+```{r}
+cbs = cbs%>% 
+  mutate(year=year(start_date)) %>%
+  mutate(month=month(start_date)) %>%
+  mutate(day=day(start_date)) %>%
+  mutate(hour=hour(start_date)) %>%
+  mutate(weekday=wday(start_date)-1)
+```
+
+
 Here's what we hve:
 
 ```{r}
@@ -71,6 +82,12 @@ Collect the data because dealing with clusters is hard:
 cbs_collected = collect(cbs)
 ```
 
+```{r}
+cbs_dated = cbs_collected %>% 
+  mutate(time=start_date %>% format("%Y-%m-%d-%H-%w")) %>% 
+    separate(time,c("year","month","day","hour","weekday"),sep="-")
+```
+
 
 Load the test data so we can start making predictions. **We should add weather to the test set at this stage of the document.**
 
@@ -78,6 +95,33 @@ Load the test data so we can start making predictions. **We should add weather t
 test_set = vroom::vroom("cbs_test.csv")
 ```
 
+## Import weather
+
+```{r}
+weather<-readRDS("data/weather.rds")
+```
+
+```{r}
+for(i in 8:20){
+  plot<-ggplot()+geom_histogram(aes(x=weather[,i]))+
+    ggtitle(colnames(weather)[i])
+  print(plot)
+}
+```
+
+
+```{r}
+for(i in c(6,7,21:23)){
+  plot<-ggplot()+geom_histogram(aes(x=weather[,i]),stat="count")+
+    ggtitle(colnames(weather)[i])
+  print(plot)
+}
+```
+
+
+
+
+## Prediction
 
 First a function for getting all reasonable stops. Warning: this is slow - we should parallelize it. **This function needs to be generalized and probably parallelized. Add weather, etc. Probably also faster to filter by month first?**
 

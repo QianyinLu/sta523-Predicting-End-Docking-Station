@@ -86,32 +86,13 @@ weat_cond = weather %>%
                        `rain` = "terrible",
                        `sleet` = "terrible",
                        `snow` = "terrible"))
-```
 
-```{r}
-weat_cond %>% group_by(year,month,day,hour) %>% summarise(n=n()) %>% filter(n>1)
-```
-
-
-```{r}
-cbs_dt_wet = merge(cbs_dt,weat_cond,all.x=T,sort = F)
+cbs_dt = merge(cbs_dt,weat_cond,all.x=T,sort = F)
 ```
 
 ```{r}
 setkey(cbs_dt, start_station, duration, end_station)
 ```
-
-```{r}
-i = 2244096
-cbs_dt[(i-5):(i+5),]
-cbs_dt_wet[(i-5):(i+5),]
-```
-
-
-```{r}
-cbs_summ=cbs_dt[(i-5):(i+1000)]
-```
-
 
 
 ## Task 2:
@@ -122,7 +103,7 @@ We have 2 hours and 4 cores to play with: that's 120x4x60=28800 seconds of compu
 First a function for getting "similar" rows. We'll use data.tables because it's crazy fast. **This function needs to be generalized a little. Add weather, etc. Order really, really, really matters.**
 ```{r}
 get_similar_rows <- function(row, input_dt, duration_delta = 0.2,
-                             month_delta = 0, hour_delta=1, temp_delta = 5) {
+                             month_delta = 2, hour_delta=2, temp_delta = 10) {
   # filter the data.table to rows with:
   # - the same start station
   # - durations in [1-duration_delta, 1+duration_delta]*actual_duration
@@ -134,10 +115,10 @@ get_similar_rows <- function(row, input_dt, duration_delta = 0.2,
   
   same_start[duration %between% c((1-duration_delta)*row$duration, (1+duration_delta)*row$duration) &
                abs(month - row$month)<= month_delta &
-               abs(hour-row$hour) <= hour_delta &
-               weekday == row$weekday &
-               icon == row$icon &
-               abs(temperature - row$temperature) <= temp_delta
+               (hour-row$hour) <= hour_delta
+               #& weekday == row$weekday
+               #& icon == row$icon
+               #& abs(temperature - row$temperature) <= temp_delta
                ]
 }
 ```
@@ -194,7 +175,7 @@ test_set = test_set %>% mutate(year = lubridate::year(start_date),
                                hour = lubridate::hour(start_date),
                                # wday returns 2~6 for Monday~Friday
                                weekday = lubridate::wday(start_date) %in% 2:6)
-test_set_wet = merge(test_set,weat_cond,all.x = T,sort = F)
+test_set = merge(test_set,weat_cond,all.x = T,sort = F)
 ```
 
 Get extra information to pass to the helper functions:
@@ -225,7 +206,7 @@ library(plyr)
 ```{r}
 final_predictions = adply(test_set, 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names),
                            .progress = "text") %>% select(-exclude_features)
-final_predictions
+#final_predictions
 ```
 
 

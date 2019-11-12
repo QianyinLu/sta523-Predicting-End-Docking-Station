@@ -8,9 +8,167 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, comment = NA, message = FALSE,
-                      warning = FALSE)
+library(tidyverse)
+library(vroom)
+#devtools::install_github("tidyverse/multidplyr")
+# make sure all other packages are up to date first
+library(multidplyr)
+library(lubridate)
+library(data.table)
 ```
 
+```{r}
+base_url = "http://www2.stat.duke.edu/~sms185/data/bike/"
+files = c("cbs_2013.csv", "cbs_2014.csv", "cbs_2015.csv", "cbs_2016.csv", "cbs_2017.csv")
+cbs_names = c("duration", "start_date", "end_date", "start_station_number", 
+               "start_station","start_station_number", "start_station", 
+               "bike_number","member_type")
+# code from slides
+clust <- multidplyr::new_cluster(3)
+multidplyr::cluster_assign_partition(clust, file_name = paste0(base_url, files))
+multidplyr::cluster_send(clust, cbs_data <- vroom::vroom(file_name))
+cbs <- multidplyr::party_df(clust, "cbs_data")
+```
+
+
+Change the names with ``rename()`` to match what we'll see in the test set:
+```{r}
+cbs = cbs %>%
+  rename(duration = Duration,
+         start_date = `Start date`,
+         end_date = `End date`,
+         start_station_number = `Start station number`,
+         start_station = `Start station`,
+         end_station_number = `End station number`,
+         end_station = `End station`,
+         member_type = `Member type`,
+         bike_number = `Bike number`)
+```
+
+We'll add the month and year as a column to make sorting quicker later on. **Note - this is where we would add the weather.**
+```{r}
+cbs = cbs %>% mutate(month = lubridate::month(start_date),
+               hour = lubridate::hour(start_date),
+               weekday = lubridate::wday(start_date)%in% 2:6)
+```
+
+
+Now we can safely move everything back to our machine, make a data.table and set keys. **It might make sense to set weather as the second key here too.**
+```{r}
+cbs_dt = data.table(collect(cbs))
+setkey(cbs_dt, start_station, duration, end_station)
+```
+
+
+## Task 2:
+
+### Helper Functions
+We have 2 hours and 4 cores to play with: that's 120x4x60=28800 seconds of computing time. There are 12532 rows we need to predict. This gives us 28800/12532 = 2.3 seconds per row, including overhead and everything. That means we probably need to get each individual prediction to under two seconds for this to work.
+
+First a function for getting "similar" rows. We'll use data.tables because it's crazy fast. **This function needs to be generalized a little. Add weather, etc. Order really, really, really matters.**
+```{r}
+get_similar_rows <- function(row, input_dt, duration_delta = 0.2,
+                             month_delta = 2, hour_delta=2) {
+  # filter the data.table to rows with:
+  # - the same start station
+  # - durations in [1-duration_delta, 1+duration_delta]*actual_duration
+  # - months within +- month_delta
+  # - hours withim +- hour delta
+  
+  
+  same_start = cbs_dt[J(row$start_station), nomatch=0L]
+  
+  same_start[duration %between% c((1-duration_delta)*row$duration, (1+duration_delta)*row$duration) &
+               abs(month(start_date) - month(row$start_date))<= month_delta &
+               abs(hour(start_date))-hour(row$start_date) <= hour_delta]
+}
+similar1 <- get_similar_rows(cbs_dt[1,])
+```
+
+
+
+The next step is to assign the empirical probabilitiy to each row. Example: If there are 400 posible stops and stop j appears 18 times in the list of similar rows then we would set p(end_stop = stop_j|data) = 18/400/ If stop k does not appear in the similar rows then we set p(end_stop = stop_k|data) = 0. **Could also just try assigning a uniform probability to these.**
+```{r}
+make_predictions <- function(similar_rows, all_stops) {
+  # takes in a list of similar rows
+  # assigns each unique stop the observed probability
+  # assigns any missing stops zero probability
+  
+  nonzero_probs = as.data.frame(table(similar_rows$end_station)/nrow(similar_rows))
+  predictions = spread(nonzero_probs, key=Var1, value=Freq)
+  
+  zero_probs = all_stops[!(all_stops %in% names(predictions))]
+  predictions[zero_probs] = 0
+  
+  predictions
+}
+```
+
+
+**Also need a fast helper function to join these together. Maybe mcapply or something? I just have a simple wrapper for now. Sorting the columns too for faster binding later. Currently handling outliers by using the precomputed naive probability. We can do better.**
+
+```{r}
+prediction_wrapper = function(row, input_dt, features, all_stops, ordered_names) {
+  # takes in a row from the test_set
+  # computes and appends predictions
+  
+  similar_rows = get_similar_rows(row, input_dt)
+  
+  if(nrow(similar_rows)==0){
+    # if there are are no similar rows in our data, just guess
+    return(row[,ordered_names])
+  }
+  
+  # compute and append predictions
+  predictions = make_predictions(similar_rows, all_stops)
+  output_row = cbind(row[features], predictions)
+  
+  # return everything in the same order to make rbind faster
+  output_row[,ordered_names]
+}
+```
+
+### Testing
+Need to load the test data. **We should add weather to the test data in the next code chunk:**
+```{r}
+test_set = vroom::vroom("http://www2.stat.duke.edu/~sms185/data/bike/cbs_test.csv")
+test_set = test_set %>% mutate(month = lubridate::month(start_date),
+               hour = lubridate::hour(start_date))
+```
+
+Get extra information to pass to the helper functions:
+```{r}
+ordered_names = names(test_set)
+features = c("start_date","end_date","duration","start_station_number",
+                  "start_station","bike_number", "member_type")
+all_stops = names(test_set)[!(names(test_set) %in% features)]
+```
+
+Here's an example row:
+```{r}
+prediction_wrapper(test_set[500,], cbs_dt, features, all_stops, ordered_names)
+```
+
+Finally, run our functions on the entire thing.
+
+```{r}
+library(plyr)
+```
+
+**Currently only running on part of the data.**
+
+```{r}
+final_predictions = adply(test_set[1:500,], 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names),
+                           .progress = "text")
+final_predictions
+```
+
+
+Save these results:
+```{r}
+write_csv(final_predictions, "cbs_git-r-done.csv")
+```
+
+**This is writing the times incorrectly and adding row names...Maybe still has a month column too? Not sure how to fix this right now.**
 
 

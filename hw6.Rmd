@@ -12,5 +12,14 @@ knitr::opts_chunk$set(echo = TRUE, comment = NA, message = FALSE,
                       warning = FALSE)
 ```
 
+```{r}
+# add weekdays/weekends
 
+wday1 <- c("Monday","Tuesday","Wednesday","Thursday","Friday")
+wday2 <- c("Saturday","Sunday")
+cbs_dt$wday <- weekdays(as.Date(cbs_dt$start_date))
+cbs_dt$wday[cbs_dt$wday %in%  wday1] <- "weekday"
+cbs_dt$wday[cbs_dt$wday %in%  wday2] <- "weekend"
+
+```
 

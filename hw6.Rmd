@@ -102,7 +102,7 @@ We have 2 hours and 4 cores to play with: that's 120x4x60=28800 seconds of compu
 First a function for getting "similar" rows. We'll use data.tables because it's crazy fast. **This function needs to be generalized a little. Add weather, etc. Order really, really, really matters.**
 ```{r}
 get_similar_rows <- function(row, input_dt, duration_delta = 0.2,
-                             month_delta = 2, hour_delta=2, temp_delta = 10) {
+                             month_delta = 2, hour_delta=2, temp_delta = 7) {
   # filter the data.table to rows with:
   # - the same start station
   # - durations in [1-duration_delta, 1+duration_delta]*actual_duration
@@ -114,8 +114,8 @@ get_similar_rows <- function(row, input_dt, duration_delta = 0.2,
   
   same_start[duration %between% c((1-duration_delta)*row$duration, (1+duration_delta)*row$duration) &
                abs(month - row$month)<= month_delta &
-               (hour-row$hour) <= hour_delta
-               #& weekday == row$weekday
+               abs(hour-row$hour) <= hour_delta
+               & weekday == row$weekday
                #& icon == row$icon
                #& abs(temperature - row$temperature) <= temp_delta
                ]
@@ -168,13 +168,13 @@ prediction_wrapper = function(row, input_dt, features, all_stops, ordered_names)
 Need to load the test data and include weather condition. **We should add weather to the test data in the next code chunk:**
 ```{r}
 test_set = vroom::vroom("cbs_test.csv")
-test_set = test_set %>% mutate(year = lubridate::year(start_date),
+test_wet = test_set %>% mutate(year = lubridate::year(start_date),
                                month = lubridate::month(start_date),
                                day = lubridate::day(start_date),
                                hour = lubridate::hour(start_date),
                                # wday returns 2~6 for Monday~Friday
                                weekday = lubridate::wday(start_date) %in% 2:6)
-test_set = merge(test_set,weat_cond,all.x = T,sort = F)
+test_wet = merge(test_wet,weat_cond,all.x = T,sort = F) %>% arrange(start_date)
 ```
 
 Get extra information to pass to the helper functions:
@@ -191,23 +191,19 @@ all_stops = names(test_set)[!(names(test_set) %in% c(features,exclude_features))
 
 Here's an example row:
 ```{r}
-prediction_wrapper(test_set[500,], cbs_dt, features, all_stops, ordered_names)
+prediction_wrapper(test_wet[i,], cbs_dt, features, all_stops, ordered_names)
 ```
 
 Finally, run our functions on the entire thing.
 
-```{r}
-library(plyr)
-```
-
 **Currently only running on part of the data.**
 
 ```{r}
-final_predictions = adply(test_set, 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names),
-                           .progress = "text") %>% select(-exclude_features)
-#final_predictions
+final_predictions = plyr::adply(test_wet, 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names),
+                           .progress = "text")
+final_predictions = final_predictions %>% select(-exclude_features)
+write_csv(final_predictions, "cbs_git-r-done.csv")
 ```
-
 
 Save these results:
 ```{r}

@@ -93,15 +93,6 @@ cbs_dt = merge(cbs_dt,weat_cond,all.x=T,sort = F)
 ```{r}
 setkey(cbs_dt, start_station, duration, end_station)
 ```
-# add weekdays/weekends
-```{r}
-wday1 <- c("Monday","Tuesday","Wednesday","Thursday","Friday")
-wday2 <- c("Saturday","Sunday")
-cbs_dt$wday <- weekdays(as.Date(cbs_dt$start_date))
-cbs_dt$wday[cbs_dt$wday %in%  wday1] <- "weekday"
-cbs_dt$wday[cbs_dt$wday %in%  wday2] <- "weekend"
-```
-
 
 ## Task 2:
 

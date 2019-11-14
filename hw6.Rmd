@@ -47,18 +47,42 @@ cbs = cbs %>%
 
 We'll add the month and year as a column to make sorting quicker later on. **Note - this is where we would add the weather.**
 ```{r}
-cbs = cbs %>% mutate(month = lubridate::month(start_date),
-               hour = lubridate::hour(start_date),
-               weekday = lubridate::wday(start_date)%in% 2:6)
+cbs = cbs %>% mutate(year = lubridate::year(start_date),
+                     month = lubridate::month(start_date),
+                     day = lubridate::day(start_date),
+                     hour = lubridate::hour(start_date),
+                     # wday returns 2~6 for Monday~Friday
+                     weekday = lubridate::wday(start_date) %in% 2:6)
 ```
 
 
 Now we can safely move everything back to our machine, make a data.table and set keys. **It might make sense to set weather as the second key here too.**
 ```{r}
 cbs_dt = data.table(collect(cbs))
-setkey(cbs_dt, start_station, duration, end_station)
+```
+Then we merge weather data.
+```{r}
+weather = readRDS("weather.rds")
+weat_cond = weather %>% 
+  select(year,month,day,hour,weekday,icon,temperature) %>% 
+  #weekday 1~5 are Monday~Friday
+  mutate(weekday = weekday %in% 1:5,
+         icon = recode(icon,
+                       `clear-day` = "nice",
+                       `clear-night` = "nice",
+                       `cloudy` = "nice",
+                       `fog` = "bad",
+                       `partly-cloudy-day` = "nice",
+                       `partly-cloudy-night` = "nice",
+                       `rain` = "terrible",
+                       `sleet` = "terrible",
+                       `snow` = "terrible"))
+cbs_dt = merge(cbs_dt,weat_cond,all.x=T,sort = F)
 ```
 
+```{r}
+setkey(cbs_dt, start_station, duration, end_station)
+```
 
 ## Task 2:
 

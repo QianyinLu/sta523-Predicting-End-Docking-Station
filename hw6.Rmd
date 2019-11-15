@@ -101,8 +101,8 @@ We have 2 hours and 4 cores to play with: that's 120x4x60=28800 seconds of compu
 
 First a function for getting "similar" rows. We'll use data.tables because it's crazy fast. **This function needs to be generalized a little. Add weather, etc. Order really, really, really matters.**
 ```{r}
-get_similar_rows <- function(row, input_dt, duration_delta = 0.2,
-                             month_delta = 2, hour_delta=2, temp_delta = 7) {
+get_similar_rows <- function(row, input_dt, duration_minus = 0.2,duration_plus=0.2,
+                             month_delta = 2, hour_delta=2, temp_delta = 20) {
   # filter the data.table to rows with:
   # - the same start station
   # - durations in [1-duration_delta, 1+duration_delta]*actual_duration
@@ -112,13 +112,14 @@ get_similar_rows <- function(row, input_dt, duration_delta = 0.2,
   
   same_start = cbs_dt[J(row$start_station), nomatch=0L]
   
-  same_start[duration %between% c((1-duration_delta)*row$duration, (1+duration_delta)*row$duration) &
-               abs(month - row$month)<= month_delta &
-               abs(hour-row$hour) <= hour_delta
-               & weekday == row$weekday
-               #& icon == row$icon
-               #& abs(temperature - row$temperature) <= temp_delta
-               ]
+  same_start[T
+             & duration %between% c((1-duration_minus)*row$duration, (1+duration_plus)*row$duration)
+             #& abs(month - row$month)<= month_delta
+             & abs(hour-row$hour) <= hour_delta
+             & weekday == row$weekday
+             #& icon == row$icon
+             #& abs(temperature - row$temperature) <= temp_delta
+             ]
 }
 ```
 
@@ -191,7 +192,7 @@ all_stops = names(test_set)[!(names(test_set) %in% c(features,exclude_features))
 
 Here's an example row:
 ```{r}
-prediction_wrapper(test_wet[i,], cbs_dt, features, all_stops, ordered_names)
+prediction_wrapper(test_wet[500,], cbs_dt, features, all_stops, ordered_names)
 ```
 
 Finally, run our functions on the entire thing.

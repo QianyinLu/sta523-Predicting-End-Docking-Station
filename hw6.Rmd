@@ -15,6 +15,8 @@ library(vroom)
 library(multidplyr)
 library(lubridate)
 library(data.table)
+require(xgboost)
+library(Matrix)
 ```
 
 ```{r}
@@ -86,6 +88,24 @@ setkey(cbs_dt, start_station, duration, end_station)
 
 ## Task 2:
 
+```{r}
+#remove start_date, start_station_number, end_station_number, end_date
+cbs_dt <- cbs_dt%>% select(-c(start_date, end_date, start_station_number, end_station_number)) 
+#change all categorical data into numeric
+sparse_matrix <- sparse.model.matrix(end_station ~ ., data = cbs_dt)[,-1]
+head(sparse_matrix)
+#convert output as numeric vector 
+end_station = factor(cbs_dt$end_station)
+label = as.integer(end_station)-1
+bst <- xgboost(data = sparse_matrix, label = label, max_depth = 4,
+               eta = 1, nthread = 2, nrounds = 10)
+```
+
+```{r}
+```
+
+
+
 ### Helper Functions
 We have 2 hours and 4 cores to play with: that's 120x4x60=28800 seconds of computing time. There are 12532 rows we need to predict. This gives us 28800/12532 = 2.3 seconds per row, including overhead and everything. That means we probably need to get each individual prediction to under two seconds for this to work.
 
@@ -156,8 +176,19 @@ prediction_wrapper = function(row, input_dt, features, all_stops, ordered_names)
 Need to load the test data. **We should add weather to the test data in the next code chunk:**
 ```{r}
 test_set = vroom::vroom("http://www2.stat.duke.edu/~sms185/data/bike/cbs_test.csv")
-test_set = test_set %>% mutate(month = lubridate::month(start_date),
-               hour = lubridate::hour(start_date))
+test_set = test_set %>% mutate(year = lubridate::year(start_date),
+                     month = lubridate::month(start_date),
+                     day = lubridate::day(start_date),
+                     hour = lubridate::hour(start_date),
+                     # wday returns 2~6 for Monday~Friday
+                     weekday = lubridate::wday(start_date) %in% 2:6)
+test_wet = merge(test_set,weat_cond,all.x = T,sort = F) %>% arrange(start_date)
+exclude_features = c("year","month","day","hour","weekday","icon","temperature")
+ordered_names = ordered_names[!(ordered_names %in% exclude_features)]
+features = c("start_date","end_date","duration","start_station_number",
+                  "start_station","bike_number", "member_type")
+all_stops = names(test_set)[!(names(test_set) %in% c(features,exclude_features))]
+
 ```
 
 Get extra information to pass to the helper functions:

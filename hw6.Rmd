@@ -112,32 +112,35 @@ As mentioned before, this will make searching by ``start_station``, `duration`, 
 Our goal is to beat uniform predictions. To us, the most immediate flaw with uniform predictions is they assign a nonzero probability to stops the cyclist could not have possibly reached in a given duration. Given a test row it seems reasonable to filter out data table to a set of rows with the same `start_station` and similar durations. We can then assign the empirical probability to the end stops in this subset of the data: for example, if there are 30 unique end stations and `A` appears $10$ times then we would set $P(\text{end_station}=A|\text{data})=10/30$. Any end stations not in this subset will be assigned a probability of zero. 
 
 ### Helper Functions
-Obviously, this method requires us to quickly generate a data table with similar rows. The next helper function does exactly that.
 
+Obviously, this method requires us to quickly generate a data table with similar rows (exactly what defines a "similar" row will be determined during the model testing later). The next helper function is the workhorse of our project:
 ```{r similarrows}
-get_similar_rows <- function(row, input_dt, duration_minus = 0.2,duration_plus=0.2,
-                             month_delta = 2, hour_delta=2, temp_delta = 10) {
+get_similar_rows <- function(row, input_dt, duration_minus = 0.2, duration_plus=0.2,
+                             month_delta = Inf, hour_delta=2, temp_delta = Inf,
+                             same_weather = FALSE) {
   # filter the data.table to rows with:
-  # - the same start station
-  # - durations in [1-duration_delta, 1+duration_delta]*actual_duration
-  # - months within +- month_delta
-  # - hours withim +- hour delta
-  
+  # - the same start station and day of the week
+  # - durations in [1-duration_minus, 1+duration_plus]*actual_duration
+  # - months/hours/temp within +- respective deltas
+  # - same weather category if same_weather
   
   same_start = cbs_dt[J(row$start_station), nomatch=0L]
   
-  same_start[T
-             & duration %between% c((1-duration_minus)*row$duration, (1+duration_plus)*row$duration)
-             #& abs(month - row$month)<= month_delta
-             & abs(hour-row$hour) <= hour_delta
-             & weekday == row$weekday
-             #& icon == row$icon
-             #& abs(temperature - row$temperature) <= temp_delta
-             ]
+  filtered = same_start[duration %between% c((1-duration_minus)*row$duration, (1+duration_plus)*row$duration) & 
+            abs(month - row$month)<= month_delta & 
+            abs(hour-row$hour) <= hour_delta & 
+            weekday == row$weekday &
+            abs(temperature - row$temperature) <= temp_delta]
+  
+  if(same_weather){
+    return(filtered[icon==row$icon])
+  }
+  
+  return(filtered)
 }
 ```
 
-The next step is to assign the empirical probabilitiy to each row. Example: If there are 400 posible stops and stop j appears 18 times in the list of similar rows then we would set p(end_stop = stop_j|data) = 18/400/ If stop k does not appear in the similar rows then we set p(end_stop = stop_k|data) = 0. **Could also just try assigning a uniform probability to these.**
+The next step is to assign the empirical probabilitiy to each row as explained above. 
 ```{r calculateprobs}
 make_predictions <- function(similar_rows, all_stops) {
   # takes in a list of similar rows
@@ -152,10 +155,9 @@ make_predictions <- function(similar_rows, all_stops) {
   
   predictions
 }
-
 ```
 
-**Also need a fast helper function to join these together. Maybe mcapply or something? I just have a simple wrapper for now. Sorting the columns too for faster binding later. Currently handling outliers by using the precomputed naive probability. We can do better.**
+There is one small problem here: some test observations are so unlike anything that we have ever seen before that they will have zero similar rows. We can't assign zero probability to every possible end stop, so we'll just stick with the uniform probability. We also need the predictions to be returned in the same order so that we can bind the results into a data table in a reasonable time. The wrapper function below handles these problems.
 
 ```{r wrapper}
 prediction_wrapper = function(row, input_dt, features, all_stops, ordered_names) {
@@ -179,8 +181,9 @@ prediction_wrapper = function(row, input_dt, features, all_stops, ordered_names)
 ```
 
 
-### Testing
-Need to load the test data and include weather condition. **We should add weather to the test data in the next code chunk:**
+### Making Predictions
+
+The test data must be loaded before we can make any predictions. Weather is also added at this stage in the same manner as before.
 ```{r loadtest}
 test_set = vroom::vroom("http://www2.stat.duke.edu/~sms185/data/bike/cbs_test.csv")
 test_wet = test_set %>% mutate(year = lubridate::year(start_date),
@@ -192,7 +195,7 @@ test_wet = test_set %>% mutate(year = lubridate::year(start_date),
 test_wet = merge(test_wet,weat_cond,all.x = T,sort = F) %>% arrange(start_date)
 ```
 
-Get extra information to pass to the helper functions:
+Here we extract the test data features we can use to fulter rows, as well as all of the possible end stops. 
 ```{r names}
 ordered_names = names(test_set)
 
@@ -202,23 +205,17 @@ features = c("start_date","end_date","duration","start_station_number",
                   "start_station","bike_number", "member_type")
 all_stops = names(test_set)[!(names(test_set) %in% c(features,exclude_features))]
 ```
-Finally, run our functions on the entire thing.
 
-**Currently only running on part of the data.**
+Producing predictions is as simple as applying our function to every row (`adply` returns a data frame and seems faster than apply). We then drop the extra features we've created and save the results.
 
 ```{r predictall}
 final_predictions = plyr::adply(test_wet, 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names),
                            .progress = "text")
 final_predictions = final_predictions %>% select(-exclude_features)
-#write_csv(final_predictions, "cbs_git-r-done.csv")
-```
 
-Save these results:
-```{r save}
 write_csv(final_predictions, "cbs_git-r-done.csv")
 ```
 
-**This is writing the times incorrectly and adding row names...Maybe still has a month column too? Not sure how to fix this right now.**
 
 ## Model selection
 

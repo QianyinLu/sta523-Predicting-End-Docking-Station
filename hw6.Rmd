@@ -23,6 +23,7 @@ library(vroom)
 library(multidplyr)
 library(lubridate)
 library(data.table)
+library(profvis)
 ```
 
 Using the code from the slides: **Note - we might not want to use all of the data.**
@@ -170,7 +171,7 @@ prediction_wrapper = function(row, input_dt, features, all_stops, ordered_names)
 ### Testing
 Need to load the test data and include weather condition. **We should add weather to the test data in the next code chunk:**
 ```{r}
-test_set = vroom::vroom("cbs_test.csv")
+test_set = vroom::vroom("http://www2.stat.duke.edu/~sms185/data/bike/cbs_test.csv")
 test_wet = test_set %>% mutate(year = lubridate::year(start_date),
                                month = lubridate::month(start_date),
                                day = lubridate::day(start_date),

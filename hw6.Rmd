@@ -1,7 +1,7 @@
 ---
 title: "Homework 6"
-author: '[Group member names]'
-date: "11/05/2019"
+author: 'Steven Winter, Zining Ma, Qianyin Lu, Mengxuan Cui'
+date: "11/14/2019"
 output: 
   html_document:
     keep_md: yes
@@ -27,6 +27,7 @@ library(data.table)
 
 Using the code from the slides: **Note - we might not want to use all of the data.**
 ```{r}
+base_url = "http://www2.stat.duke.edu/~sms185/data/bike/"
 files = c("cbs_2013.csv", "cbs_2014.csv", "cbs_2015.csv", "cbs_2016.csv", "cbs_2017.csv")
 
 cbs_names = c("duration", "start_date", "end_date", "start_station_number", 
@@ -35,7 +36,7 @@ cbs_names = c("duration", "start_date", "end_date", "start_station_number",
 
 # code from slides
 clust <- multidplyr::new_cluster(3)
-multidplyr::cluster_assign_partition(clust, file_name = files)
+multidplyr::cluster_assign_partition(clust, file_name = paste0(base_url, files))
 multidplyr::cluster_send(clust, cbs_data <- vroom::vroom(file_name))
 cbs <- multidplyr::party_df(clust, "cbs_data")
 ```
@@ -100,9 +101,10 @@ setkey(cbs_dt, start_station, duration, end_station)
 We have 2 hours and 4 cores to play with: that's 120x4x60=28800 seconds of computing time. There are 12532 rows we need to predict. This gives us 28800/12532 = 2.3 seconds per row, including overhead and everything. That means we probably need to get each individual prediction to under two seconds for this to work.
 
 First a function for getting "similar" rows. We'll use data.tables because it's crazy fast. **This function needs to be generalized a little. Add weather, etc. Order really, really, really matters.**
+
 ```{r}
 get_similar_rows <- function(row, input_dt, duration_minus = 0.2,duration_plus=0.2,
-                             month_delta = 2, hour_delta=2, temp_delta = 20) {
+                             month_delta = 2, hour_delta=2, temp_delta = 10) {
   # filter the data.table to rows with:
   # - the same start station
   # - durations in [1-duration_delta, 1+duration_delta]*actual_duration
@@ -203,7 +205,7 @@ Finally, run our functions on the entire thing.
 final_predictions = plyr::adply(test_wet, 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names),
                            .progress = "text")
 final_predictions = final_predictions %>% select(-exclude_features)
-write_csv(final_predictions, "cbs_git-r-done.csv")
+#write_csv(final_predictions, "cbs_git-r-done.csv")
 ```
 
 Save these results:
@@ -213,9 +215,63 @@ write_csv(final_predictions, "cbs_git-r-done.csv")
 
 **This is writing the times incorrectly and adding row names...Maybe still has a month column too? Not sure how to fix this right now.**
 
+## Model selection
 
+In our final model, we use these conditions:
 
+1. $|hour_{sample}-hour_{pred}|<=2$
 
+2. $duration_{sample}\in[0.8*duration_{pred},1.2*duration_{pred}]$
 
+3. $weekday_{sample}$ and $weekday_{pred}$ are both in {Monday~Friday} or {Sunday,Saturday}
 
+How we choose our model is described detailed below:
 
+We started from a model which considers condition $\Delta_{month}\leq2$, $\Delta_{hour}\leq2$, $\Delta_{duration}\leq20\%$, and this model gave us score=5.61.
+
+Then we thought weather and weekday may affect people's choice, so we 
+
+1. integrated weather data: temperature and icon, which has values {nice,bad,terrible}
+
+2. add weekday indicator: with values TRUE: weekday is in Monday~Friday, and FALSE: weekday is Sunday or Saturday.
+
+We combined temperature, icon and weekday into above setting, and got a terrible score=3.75.
+
+Then we tried combinations of new variables and got following results:
+
+1. weekday+temperature(change $\leq$ 7):5.23
+
+2. weekday+icon:5.43
+
+3. weekday only:5.77
+
+(We didn't exclude weekday because we think it really matters)
+
+It's a shock that adding new variables more than weekday is making the score worse. We guess the reason is that, adding variables is reducing our filtered sample too much that the given prediction can not capture the whole picture.
+
+So we changed our direction: what will happed if we add very little conditions?
+
+We tried two setting:
+
+1. only weekday indicator, no month,hour,duration and weather, and got a score=1.97
+
+2. no condition at all, completely naive prediction based on whole data, and got score 1.90
+
+Comparision between these attempts and those above, it shows that duration and time really matters.
+
+And then we chose a model as:
+
+$\Delta_{duration}\leq20\%$, $\Delta_{hour}\leq2$, $\Delta{temperature}\leq7$ and consider weekday.
+
+We have hour here but month not because We think time in a day is much more important than month, and information of month is mainly season, which could be replaced by temperature. This setting gave us a highest score 5.85 at that time.
+
+Then based on this setting, we tried more adjustment:
+
+1. change $\Delta_{duration}\leq20\%$ to $\Delta_{duration}\in[-50\%,20\%]$ and $\Delta_{duration}\in[-20\%,50\%]$ and got score 5.03 and 5.40 respectively. It shows that our previous setting $\Delta_{duration}\leq20\%$ is a good intuitive choice.
+
+2. change $\Delta_{temperature}\leq7$ to $\Delta_{temperature}\leq5$ and $\Delta_{temperature}\leq10$ and got score 5.65 and 6.02 respectively. It shows that larger range of temperature give more precise prediction. 
+
+3. so We tried next model excluding temperature, and got a amazing score 6.15.
+
+This final model including conditions $\Delta_{duration}\leq20\%$, 
+$\Delta_{hour}\leq2$ and weekday indicator is our best model. And the process we got here showes that time is a sigificant factor and weather doesn't matter.

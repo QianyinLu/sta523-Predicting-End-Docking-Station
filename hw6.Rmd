@@ -12,10 +12,10 @@ knitr::opts_chunk$set(echo = TRUE, comment = NA, message = FALSE,
                       warning = FALSE)
 ```
 
-## Task 1
+## Preliminaries
 
-Start by loading backages and the data.
-```{r}
+We need the following packages:
+```{r packages}
 library(tidyverse)
 library(vroom)
 #devtools::install_github("tidyverse/multidplyr")
@@ -26,8 +26,10 @@ library(data.table)
 library(profvis)
 ```
 
-Using the code from the slides: **Note - we might not want to use all of the data.**
-```{r}
+## Task 1
+
+We're going to use the code from the class to load the data in parallel. Here we create a cluster with 4 nodes and tell ``R`` to split up loading these 5 files over the four nodes. Ideally this would be done over five nodes, but we were not allowed to use more than four.
+```{r loaddata}
 base_url = "http://www2.stat.duke.edu/~sms185/data/bike/"
 files = c("cbs_2013.csv", "cbs_2014.csv", "cbs_2015.csv", "cbs_2016.csv", "cbs_2017.csv")
 
@@ -36,14 +38,14 @@ cbs_names = c("duration", "start_date", "end_date", "start_station_number",
                "bike_number","member_type")
 
 # code from slides
-clust <- multidplyr::new_cluster(3)
+clust <- multidplyr::new_cluster(4)
 multidplyr::cluster_assign_partition(clust, file_name = paste0(base_url, files))
 multidplyr::cluster_send(clust, cbs_data <- vroom::vroom(file_name))
 cbs <- multidplyr::party_df(clust, "cbs_data")
 ```
 
-Change the names with ``rename()`` to match what we'll see in the test set:
-```{r}
+We will now use ``rename()`` to replace the current column names with the names from ``cbs_test.csv``. This will make it easier to filter the data later on.
+```{r rename}
 cbs = cbs %>%
   dplyr::rename(duration = Duration,
          start_date = `Start date`,
@@ -56,8 +58,8 @@ cbs = cbs %>%
          bike_number = `Bike number`)
 ```
 
-We'll add the month and year as a column to make sorting quicker later on. **Note - this is where we would add the weather.**
-```{r}
+We'll also leverage the cluster to create columns for year, month, day, and hour. These will be used for filtering later.
+```{r addcols}
 cbs = cbs %>% mutate(year = lubridate::year(start_date),
                      month = lubridate::month(start_date),
                      day = lubridate::day(start_date),
@@ -66,14 +68,20 @@ cbs = cbs %>% mutate(year = lubridate::year(start_date),
                      weekday = lubridate::wday(start_date) %in% 2:6)
 ```
 
-Now we can safely move everything back to our machine, make a data.table and set keys. **It might make sense to set weather as the second key here too.**
-```{r}
+That is all of the preprocessing we need to do. Now we will move the data back to our machine wiht ``collect()`` and convert it to a ``data.table``. The main advantage of data tables is they allow the user to set binary search keys, which makes filtering the data dramatically faster than filtering a data frame. 
+```{r collect}
 cbs_dt = data.table(collect(cbs))
 ```
 
-Then we merge weather data. Script getting weather data and parse them into dataframe are in folder /get, due to api limitation, it needs at least 3 days to get all the data, so we just uploaded prepared weather.rds
-```{r}
+We have to add the weather data before we set any search keys. API limitations forced us to gather all of the weather data in advance - below is the code we used to produce ``weather.Rds``. 
+```{r getweather}
+# need to add the code here, probably set eval to false?
+```
+
+We don't believe that cyclists care if the weather is clear or partly cloudy; nor do we think there's much of a difference between their behaviour in heavy rain or heavy snow. This leads us to create coarsely binned categories for weather conditions. This new column is added alongside temperature to the data table created above based on time.
+```{r addweather}
 weather = readRDS("weather.rds")
+
 weat_cond = weather %>% 
   select(year,month,day,hour,weekday,icon,temperature) %>% 
   #weekday 1~5 are Monday~Friday
@@ -92,18 +100,21 @@ weat_cond = weather %>%
 cbs_dt = merge(cbs_dt,weat_cond,all.x=T,sort = F)
 ```
 
-```{r}
+We can finally set keys:
+```{r keys}
 setkey(cbs_dt, start_station, duration, end_station)
 ```
 
+As mentioned before, this will make searching by ``start_station``, `duration`, or `end_station` very fast.
+
 ## Task 2:
 
+Our goal is to beat uniform predictions. To us, the most immediate flaw with uniform predictions is they assign a nonzero probability to stops the cyclist could not have possibly reached in a given duration. Given a test row it seems reasonable to filter out data table to a set of rows with the same `start_station` and similar durations. We can then assign the empirical probability to the end stops in this subset of the data: for example, if there are 30 unique end stations and `A` appears $10$ times then we would set $P(\text{end_station}=A|\text{data})=10/30$. Any end stations not in this subset will be assigned a probability of zero. 
+
 ### Helper Functions
-We have 2 hours and 4 cores to play with: that's 120x4x60=28800 seconds of computing time. There are 12532 rows we need to predict. This gives us 28800/12532 = 2.3 seconds per row, including overhead and everything. That means we probably need to get each individual prediction to under two seconds for this to work.
+Obviously, this method requires us to quickly generate a data table with similar rows. The next helper function does exactly that.
 
-First a function for getting "similar" rows. We'll use data.tables because it's crazy fast. **This function needs to be generalized a little. Add weather, etc. Order really, really, really matters.**
-
-```{r}
+```{r similarrows}
 get_similar_rows <- function(row, input_dt, duration_minus = 0.2,duration_plus=0.2,
                              month_delta = 2, hour_delta=2, temp_delta = 10) {
   # filter the data.table to rows with:
@@ -127,7 +138,7 @@ get_similar_rows <- function(row, input_dt, duration_minus = 0.2,duration_plus=0
 ```
 
 The next step is to assign the empirical probabilitiy to each row. Example: If there are 400 posible stops and stop j appears 18 times in the list of similar rows then we would set p(end_stop = stop_j|data) = 18/400/ If stop k does not appear in the similar rows then we set p(end_stop = stop_k|data) = 0. **Could also just try assigning a uniform probability to these.**
-```{r}
+```{r calculateprobs}
 make_predictions <- function(similar_rows, all_stops) {
   # takes in a list of similar rows
   # assigns each unique stop the observed probability
@@ -146,7 +157,7 @@ make_predictions <- function(similar_rows, all_stops) {
 
 **Also need a fast helper function to join these together. Maybe mcapply or something? I just have a simple wrapper for now. Sorting the columns too for faster binding later. Currently handling outliers by using the precomputed naive probability. We can do better.**
 
-```{r}
+```{r wrapper}
 prediction_wrapper = function(row, input_dt, features, all_stops, ordered_names) {
   # takes in a row from the test_set
   # computes and appends predictions
@@ -170,7 +181,7 @@ prediction_wrapper = function(row, input_dt, features, all_stops, ordered_names)
 
 ### Testing
 Need to load the test data and include weather condition. **We should add weather to the test data in the next code chunk:**
-```{r}
+```{r loadtest}
 test_set = vroom::vroom("http://www2.stat.duke.edu/~sms185/data/bike/cbs_test.csv")
 test_wet = test_set %>% mutate(year = lubridate::year(start_date),
                                month = lubridate::month(start_date),
@@ -182,7 +193,7 @@ test_wet = merge(test_wet,weat_cond,all.x = T,sort = F) %>% arrange(start_date)
 ```
 
 Get extra information to pass to the helper functions:
-```{r}
+```{r names}
 ordered_names = names(test_set)
 
 exclude_features = c("year","month","day","hour","weekday","icon","temperature")
@@ -190,19 +201,12 @@ ordered_names = ordered_names[!(ordered_names %in% exclude_features)]
 features = c("start_date","end_date","duration","start_station_number",
                   "start_station","bike_number", "member_type")
 all_stops = names(test_set)[!(names(test_set) %in% c(features,exclude_features))]
-
 ```
-
-Here's an example row:
-```{r}
-prediction_wrapper(test_wet[500,], cbs_dt, features, all_stops, ordered_names)
-```
-
 Finally, run our functions on the entire thing.
 
 **Currently only running on part of the data.**
 
-```{r}
+```{r predictall}
 final_predictions = plyr::adply(test_wet, 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names),
                            .progress = "text")
 final_predictions = final_predictions %>% select(-exclude_features)
@@ -210,7 +214,7 @@ final_predictions = final_predictions %>% select(-exclude_features)
 ```
 
 Save these results:
-```{r}
+```{r save}
 write_csv(final_predictions, "cbs_git-r-done.csv")
 ```
 

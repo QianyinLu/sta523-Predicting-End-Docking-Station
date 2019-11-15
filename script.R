@@ -114,7 +114,6 @@ prediction_wrapper = function(row, input_dt, features, all_stops, ordered_names)
   # return everything in the same order to make rbind faster
   output_row[,ordered_names]
 }
-})
 
 test_set = vroom::vroom("http://www2.stat.duke.edu/~sms185/data/bike/cbs_test.csv")
 test_wet = test_set %>% mutate(year = lubridate::year(start_date),
@@ -141,6 +140,7 @@ final_predictions = final_predictions %>% select(-exclude_features)
 #write_csv(final_predictions, "cbs_git-r-done.csv")
 
 write_csv(final_predictions, "cbs_git-r-done.csv")
+})
 
 
 

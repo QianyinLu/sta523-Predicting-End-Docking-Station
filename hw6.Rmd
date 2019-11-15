@@ -70,7 +70,7 @@ Now we can safely move everything back to our machine, make a data.table and set
 cbs_dt = data.table(collect(cbs))
 ```
 
-Then we merge weather data.
+Then we merge weather data. Script getting weather data and parse them into dataframe are in folder /get, due to api limitation, it needs at least 3 days to get all the data, so we just uploaded prepared weather.rds
 ```{r}
 weather = readRDS("weather.rds")
 weat_cond = weather %>% 

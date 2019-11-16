@@ -68,7 +68,7 @@ cbs = cbs %>% mutate(year = lubridate::year(start_date),
                      weekday = lubridate::wday(start_date) %in% 2:6)
 ```
 
-That is all of the preprocessing we need to do. Now we will move the data back to our machine wiht ``collect()`` and convert it to a ``data.table``. The main advantage of data tables is they allow the user to set binary search keys, which makes filtering the data dramatically faster than filtering a data frame. 
+That is all of the preprocessing we need to do. Now we will move the data back to our machine with ``collect()`` and convert it to a ``data.table``. The main advantage of data tables is they allow the user to set binary search keys, which makes filtering the data dramatically faster than filtering a data frame. 
 ```{r collect}
 cbs_dt = data.table(collect(cbs))
 ```
@@ -266,7 +266,7 @@ Changing the duration range always resulted in a worse score, and dropping month
 
 * the same start station as $x$,
 * the same weekday indicator as $x$, 
-* a start hour within $\pm$ 2 months of the start hour of $x$, and
+* a start hour within $\pm$ 2 hours of the start hour of $x$, and
 * a duration at least $80\%$ the duration of $x$ and not more than $120\%$.
 
 This gave us a score of 6.15, which we have been unable to top.

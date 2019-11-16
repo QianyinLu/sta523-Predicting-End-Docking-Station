@@ -245,7 +245,7 @@ Let $x$ be a single test row. Our first model defined a similar row as any row w
 
 * the same start station as $x$,
 * a start month within $\pm$ 2 months of the start month of $x$,
-* a start hour within $\pm$ 2 months of the start hour of $x$, and
+* a start hour within $\pm$ 2 hourss of the start hour of $x$, and
 * a duration at least $80\%$ the duration of $x$ and not more than $120\%$.
 
 This model gave us a score of 5.61, but did not incorporate weather. Our second model had the same settings as above, but restricted to rows with:

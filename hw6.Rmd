@@ -73,10 +73,34 @@ That is all of the preprocessing we need to do. Now we will move the data back t
 cbs_dt = data.table(collect(cbs))
 ```
 
-We have to add the weather data before we set any search keys. API limitations forced us to gather all of the weather data in advance - below is the code we used to produce ``weather.Rds``. 
-```{r getweather}
-# need to add the code here, probably set eval to false?
+We have to add the weather data before we set any search keys. API limitations forced us to gather all of the weather data in advance - that code is in the `get` folder. The `get_wet.R` script in that folder contains this code:
+```{r getweather, eval=FALSE}
+key<-"9e3c829d6ef2609428893d0252751748"
+
+st<-as.Date("2013-1-1")
+len<-as.Date("2017-12-31")-st
+
+dates<-sapply(0:len, function(i){
+  (st+i) %>% as.character()
+})
+
+if(!dir.exists("data")){
+  dir.create("data")
+}
+
+if(!dir.exists("data/weather")){
+  dir.create("data/weather")
+}
+
+# change iteration range here to get required data
+for(i in 1000:1826){
+  qr<-paste0("https://api.darksky.net/forecast/9e3c829d6ef2609428893d0252751748/38.9070412,-77.0376289,",dates[i],"T00:00:00?units=si&exclude=minutely")
+  fname<-paste0("data/weather/",dates[i],".json")
+  download.file(qr,fname)
+}
 ```
+
+The iteration range can be changed to grab the weather in batches. The `parse_wet.R` script was run after each run of `get_wet.R`; all it does is add the extracted information onto the end of `weather.Rds`. We did not upload the individual weather files because of size limitations.
 
 We don't believe that cyclists care if the weather is clear or partly cloudy; nor do we think there's much of a difference between their behaviour in heavy rain or heavy snow. This leads us to create coarsely binned categories for weather conditions. This new column is added alongside temperature to the data table created above based on time.
 ```{r addweather}
@@ -102,10 +126,10 @@ cbs_dt = merge(cbs_dt,weat_cond,all.x=T,sort = F)
 
 We can finally set keys:
 ```{r keys}
-setkey(cbs_dt, start_station, duration, end_station)
+setkey(cbs_dt, start_station, duration, weekday)
 ```
 
-As mentioned before, this will make searching by ``start_station``, `duration`, or `end_station` very fast.
+As mentioned before, this will make searching by ``start_station``, `duration`, or `weekday` very fast.
 
 ## Task 2:
 
@@ -126,11 +150,11 @@ get_similar_rows <- function(row, input_dt, duration_minus = 0.2, duration_plus=
   
   same_start = cbs_dt[J(row$start_station), nomatch=0L]
   
-  filtered = same_start[duration %between% c((1-duration_minus)*row$duration, (1+duration_plus)*row$duration) & 
-            abs(month - row$month)<= month_delta & 
+  filtered = same_start[duration %between% c((1-duration_minus)*row$duration, (1+duration_plus)*row$duration) &
             abs(hour-row$hour) <= hour_delta & 
             weekday == row$weekday &
-            abs(temperature - row$temperature) <= temp_delta]
+            abs(temperature - row$temperature) <= temp_delta &
+            abs(month - row$month)<= month_delta]
   
   if(same_weather){
     return(filtered[icon==row$icon])
@@ -209,71 +233,49 @@ all_stops = names(test_set)[!(names(test_set) %in% c(features,exclude_features))
 Producing predictions is as simple as applying our function to every row (`adply` returns a data frame and seems faster than apply). We then drop the extra features we've created and save the results.
 
 ```{r predictall}
-final_predictions = plyr::adply(test_wet, 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names),
-                           .progress = "text")
+final_predictions = plyr::adply(test_wet, 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names))
 final_predictions = final_predictions %>% select(-exclude_features)
 
 write_csv(final_predictions, "cbs_git-r-done.csv")
 ```
 
 
-## Model selection
+### Model selection
 
-In our final model, we use these conditions:
+Let $x$ be a single test row. Our first model defined a similar row as any row with all of the following conditions:
 
-1. $|hour_{sample}-hour_{pred}|<=2$
+* the same start station as $x$,
+* a start month within $\pm$ 2 months of the start month of $x$,
+* a start hour within $\pm$ 2 months of the start hour of $x$, and
+* a duration at least $80\%$ the duration of $x$ and not more than $120\%$.
 
-2. $duration_{sample}\in[0.8*duration_{pred},1.2*duration_{pred}]$
+This model gave us a score of 5.61, but did not incorporate weather. Our second model had the same settings as above, but restricted to rows with:
 
-3. $weekday_{sample}$ and $weekday_{pred}$ are both in {Monday~Friday} or {Sunday,Saturday}
+* the same type of weather (nice, bad, terrible) as $x$, 
+* a temperature within $10$ degrees of $x$, and
+* the same `weekday` indicator as $x$.
 
-How we choose our model is described detailed below:
+This model was terrible: we got a score around 3.75. We tried adding the following combinations of varaibles to the above:
 
-We started from a model which considers condition $\Delta_{month}\leq2$, $\Delta_{hour}\leq2$, $\Delta_{duration}\leq20\%$, and this model gave us score=5.61.
+* Same weekday indicator and temperature within seven degrees. Got a score of 5.23.
+* Same weekday indicator and same weather conditions. Got a score of 5.43.
+* Same weekday indicator. Got a score of 5.77.
 
-Then we thought weather and weekday may affect people's choice, so we 
+Shockingly, weekday only gave us the best score yet. We believe that the weather variables are too noisy to provide useful information with a crude filtering technique - as such, weather was not included in any model after this. We also tried incredibly simple models, such as a model with only weekday. This resulted in a miserable score of 1.97, which indicates that duration and time are still relevant in some sense.
 
-1. integrated weather data: temperature and icon, which has values {nice,bad,terrible}
+Changing the duration range always resulted in a worse score, and dropping month resulted in a slight improvement. Ultimately we settled on the model where a similar row has
 
-2. add weekday indicator: with values TRUE: weekday is in Monday~Friday, and FALSE: weekday is Sunday or Saturday.
+* the same start station as $x$,
+* the same weekday indicator as $x$, 
+* a start hour within $\pm$ 2 months of the start hour of $x$, and
+* a duration at least $80\%$ the duration of $x$ and not more than $120\%$.
 
-We combined temperature, icon and weekday into above setting, and got a terrible score=3.75.
+This gave us a score of 6.15, which we have been unable to top.
 
-Then we tried combinations of new variables and got following results:
+### Model Analysis
 
-1. weekday+temperature(change $\leq$ 7):5.23
+Our model is purely deterministic and consequently has no variance between repeated runs on the same test data. Our filtering criterion are not at all strict: it is unlikely we are over fitting anything. We are proud of the relatively impressive performance given the simplicity of our model.
 
-2. weekday+icon:5.43
+However, there are two potential drawbacks. First, our filtering criterion throws out a lot of data that might have useful information. Second, our filtering criterion never accounts for outliers - this means that we will almost always fail to predict these edge test cases.
 
-3. weekday only:5.77
-
-(We didn't exclude weekday because we think it really matters)
-
-It's a shock that adding new variables more than weekday is making the score worse. We guess the reason is that, adding variables is reducing our filtered sample too much that the given prediction can not capture the whole picture.
-
-So we changed our direction: what will happed if we add very little conditions?
-
-We tried two setting:
-
-1. only weekday indicator, no month,hour,duration and weather, and got a score=1.97
-
-2. no condition at all, completely naive prediction based on whole data, and got score 1.90
-
-Comparision between these attempts and those above, it shows that duration and time really matters.
-
-And then we chose a model as:
-
-$\Delta_{duration}\leq20\%$, $\Delta_{hour}\leq2$, $\Delta{temperature}\leq7$ and consider weekday.
-
-We have hour here but month not because We think time in a day is much more important than month, and information of month is mainly season, which could be replaced by temperature. This setting gave us a highest score 5.85 at that time.
-
-Then based on this setting, we tried more adjustment:
-
-1. change $\Delta_{duration}\leq20\%$ to $\Delta_{duration}\in[-50\%,20\%]$ and $\Delta_{duration}\in[-20\%,50\%]$ and got score 5.03 and 5.40 respectively. It shows that our previous setting $\Delta_{duration}\leq20\%$ is a good intuitive choice.
-
-2. change $\Delta_{temperature}\leq7$ to $\Delta_{temperature}\leq5$ and $\Delta_{temperature}\leq10$ and got score 5.65 and 6.02 respectively. It shows that larger range of temperature give more precise prediction. 
-
-3. so We tried next model excluding temperature, and got a amazing score 6.15.
-
-This final model including conditions $\Delta_{duration}\leq20\%$, 
-$\Delta_{hour}\leq2$ and weekday indicator is our best model. And the process we got here showes that time is a sigificant factor and weather doesn't matter.
+### Profiling

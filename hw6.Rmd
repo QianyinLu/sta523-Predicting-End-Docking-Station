@@ -96,7 +96,7 @@ if(!dir.exists("data/weather")){
 for(i in 1000:1826){
   qr<-paste0("https://api.darksky.net/forecast/9e3c829d6ef2609428893d0252751748/38.9070412,-77.0376289,",dates[i],"T00:00:00?units=si&exclude=minutely")
   fname<-paste0("data/weather/",dates[i],".json")
-  download.file(qr,fname)
+  #download.file(qr,fname)
 }
 ```
 
@@ -278,3 +278,20 @@ Our model is purely deterministic and consequently has no variance between repea
 However, there are two potential drawbacks. First, our filtering criterion throws out a lot of data that might have useful information. Second, our filtering criterion never accounts for outliers - this means that we will almost always fail to predict these edge test cases.
 
 ### Profiling
+
+Profiling the code all at once resulted in a massive html file that was too big to upload to github, so we've opted to profile the first half and the last half of the code seperately. We simply wrapped everything from the Task 1 in `profvis` to produce `preliminary_profile.html` and wrapped everything from Task 2 with the same function to produce `prediction_profile.html`. 
+
+In `prediction_profile.html` we see that loading the data takes an exorbitant amount of time (between 6-7 min). This could be reduced by using 5 cores instead of 4, so we would be able to load one file per core instead of having one core have to do twice the work of the others. Collecting the data takes another minute; not much we could do to speed this up. Merging the weather data is suprisingly fast, only taking around 20 seconds.
+
+The time it takes to make predictions is highly variable depending on how well the server is behaving. We see in `prediction_profile.html` that the most time consuming step at each prediction is filtering the data, as expected. It appears that data.tables are the fastest way to filter these sorts of data structures in `R`, so it is unlikely we could make much of an improvement here. We could speed things up considerably by using the parallelzied version of `adply`, but unfortunately we weren't able to get that working in the alloted time. Lastly, we see that `rbinding` the data together after making each prediction took up $20\%$ of the total prediction time. There's probably a fancy function that does this faster.
+
+
+
+
+
+
+
+
+
+
+

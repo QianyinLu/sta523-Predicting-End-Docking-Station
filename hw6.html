@@ -429,8 +429,31 @@ cbs &lt;- multidplyr::party_df(clust, &quot;cbs_data&quot;)</code></pre>
                      weekday = lubridate::wday(start_date) %in% 2:6)</code></pre>
 <p>That is all of the preprocessing we need to do. Now we will move the data back to our machine wiht <code>collect()</code> and convert it to a <code>data.table</code>. The main advantage of data tables is they allow the user to set binary search keys, which makes filtering the data dramatically faster than filtering a data frame.</p>
 <pre class="r"><code>cbs_dt = data.table(collect(cbs))</code></pre>
-<p>We have to add the weather data before we set any search keys. API limitations forced us to gather all of the weather data in advance - below is the code we used to produce <code>weather.Rds</code>.</p>
-<pre class="r"><code># need to add the code here, probably set eval to false?</code></pre>
+<p>We have to add the weather data before we set any search keys. API limitations forced us to gather all of the weather data in advance - that code is in the <code>get</code> folder. The <code>get_wet.R</code> script in that folder contains this code:</p>
+<pre class="r"><code>key&lt;-&quot;9e3c829d6ef2609428893d0252751748&quot;
+
+st&lt;-as.Date(&quot;2013-1-1&quot;)
+len&lt;-as.Date(&quot;2017-12-31&quot;)-st
+
+dates&lt;-sapply(0:len, function(i){
+  (st+i) %&gt;% as.character()
+})
+
+if(!dir.exists(&quot;data&quot;)){
+  dir.create(&quot;data&quot;)
+}
+
+if(!dir.exists(&quot;data/weather&quot;)){
+  dir.create(&quot;data/weather&quot;)
+}
+
+# change iteration range here to get required data
+for(i in 1000:1826){
+  qr&lt;-paste0(&quot;https://api.darksky.net/forecast/9e3c829d6ef2609428893d0252751748/38.9070412,-77.0376289,&quot;,dates[i],&quot;T00:00:00?units=si&amp;exclude=minutely&quot;)
+  fname&lt;-paste0(&quot;data/weather/&quot;,dates[i],&quot;.json&quot;)
+  #download.file(qr,fname)
+}</code></pre>
+<p>The iteration range can be changed to grab the weather in batches. The <code>parse_wet.R</code> script was run after each run of <code>get_wet.R</code>; all it does is add the extracted information onto the end of <code>weather.Rds</code>. We did not upload the individual weather files because of size limitations.</p>
 <p>We don’t believe that cyclists care if the weather is clear or partly cloudy; nor do we think there’s much of a difference between their behaviour in heavy rain or heavy snow. This leads us to create coarsely binned categories for weather conditions. This new column is added alongside temperature to the data table created above based on time.</p>
 <pre class="r"><code>weather = readRDS(&quot;weather.rds&quot;)
 
@@ -529,13 +552,12 @@ test_wet = test_set %&gt;% mutate(year = lubridate::year(start_date),
                                weekday = lubridate::wday(start_date) %in% 2:6)
 test_wet = merge(test_wet,weat_cond,all.x = T,sort = F) %&gt;% arrange(start_date)</code></pre>
 <p>Here we extract the test data features we can use to fulter rows, as well as all of the possible end stops.</p>
-<pre class="r"><code>ordered_names = names(test_set)
+<pre class="r"><code>ordered_names = colnames(test_set)
 
 exclude_features = c(&quot;year&quot;,&quot;month&quot;,&quot;day&quot;,&quot;hour&quot;,&quot;weekday&quot;,&quot;icon&quot;,&quot;temperature&quot;)
-ordered_names = ordered_names[!(ordered_names %in% exclude_features)]
 features = c(&quot;start_date&quot;,&quot;end_date&quot;,&quot;duration&quot;,&quot;start_station_number&quot;,
                   &quot;start_station&quot;,&quot;bike_number&quot;, &quot;member_type&quot;)
-all_stops = names(test_set)[!(names(test_set) %in% c(features,exclude_features))]</code></pre>
+all_stops = ordered_names[!(ordered_names %in% features)]</code></pre>
 <p>Producing predictions is as simple as applying our function to every row (<code>adply</code> returns a data frame and seems faster than apply). We then drop the extra features we’ve created and save the results.</p>
 <pre class="r"><code>final_predictions = plyr::adply(test_wet, 1, function(x) prediction_wrapper(x, cbs_dt, features, all_stops, ordered_names))
 final_predictions = final_predictions %&gt;% select(-exclude_features)
@@ -580,6 +602,9 @@ write_csv(final_predictions, &quot;cbs_git-r-done.csv&quot;)</code></pre>
 </div>
 <div id="profiling" class="section level3">
 <h3>Profiling</h3>
+<p>Profiling the code all at once resulted in a massive html file that was too big to upload to github, so we’ve opted to profile the first half and the last half of the code seperately. We simply wrapped everything from the Task 1 in <code>profvis</code> to produce <code>preliminary_profile.html</code> and wrapped everything from Task 2 with the same function to produce <code>prediction_profile.html</code>.</p>
+<p>In <code>prediction_profile.html</code> we see that loading the data takes an exorbitant amount of time (between 6-7 min). This could be reduced by using 5 cores instead of 4, so we would be able to load one file per core instead of having one core have to do twice the work of the others. Collecting the data takes another minute; not much we could do to speed this up. Merging the weather data is suprisingly fast, only taking around 20 seconds.</p>
+<p>The time it takes to make predictions is highly variable depending on how well the server is behaving. We see in <code>prediction_profile.html</code> that the most time consuming step at each prediction is filtering the data, as expected. It appears that data.tables are the fastest way to filter these sorts of data structures in <code>R</code>, so it is unlikely we could make much of an improvement here. We could speed things up considerably by using the parallelzied version of <code>adply</code>, but unfortunately we weren’t able to get that working in the alloted time. Lastly, we see that <code>rbinding</code> the data together after making each prediction took up <span class="math inline">\(20\%\)</span> of the total prediction time. There’s probably a fancy function that does this faster.</p>
 </div>
 </div>
 

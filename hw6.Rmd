@@ -221,13 +221,12 @@ test_wet = merge(test_wet,weat_cond,all.x = T,sort = F) %>% arrange(start_date)
 
 Here we extract the test data features we can use to fulter rows, as well as all of the possible end stops. 
 ```{r names}
-ordered_names = names(test_set)
+ordered_names = colnames(test_set)
 
 exclude_features = c("year","month","day","hour","weekday","icon","temperature")
-ordered_names = ordered_names[!(ordered_names %in% exclude_features)]
 features = c("start_date","end_date","duration","start_station_number",
                   "start_station","bike_number", "member_type")
-all_stops = names(test_set)[!(names(test_set) %in% c(features,exclude_features))]
+all_stops = ordered_names[!(ordered_names %in% features)]
 ```
 
 Producing predictions is as simple as applying our function to every row (`adply` returns a data frame and seems faster than apply). We then drop the extra features we've created and save the results.
